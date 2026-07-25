@@ -181,7 +181,16 @@ def verify_gate(encoder, index, taxonomy, tok_dir, ntok, n=32, dom_min=0.85, sel
     rng = np.random.RandomState(seed)
     gids = index.all_gids()
     uniq = np.unique(gids)
-    samp = rng.choice(uniq, size=min(n, len(uniq)), replace=False)
+    # Sample preferentially from gids whose tokenized reference is PRESENT — supports partial-reference edge
+    # deploys (e.g. the serving host carries only a sample of the token corpus) while keeping the gate's meaning
+    # (self-retrieval on real genomes). Falls back to the full index when the whole corpus is available.
+    try:
+        have = {f[:-4] for f in os.listdir(tok_dir) if f.endswith(".npy")}
+        present = np.array([int(g) for g in uniq if taxonomy[int(g)].get("accession") in have], dtype=np.int64)
+    except Exception:
+        present = uniq
+    pool = present if len(present) >= n else uniq
+    samp = rng.choice(pool, size=min(n, len(pool)), replace=False)
     dom_ok = self_ok = tot = 0
     for g in samp:
         g = int(g)

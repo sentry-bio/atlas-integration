@@ -21,6 +21,23 @@ Each dir carries `index.faiss` (~968MB), `gids.npy`, `meta.json` (verify: domain
 - `atlas_index_full/300bp/genome_taxonomy_full.json` — list[234526] by gid. GTDB-derived; labels
   domain/family/genus/species (phylum/class/order are absent in this snapshot).
 
-## To stamp at deploy (Phase 1)
-- `sha256sum` of each `index.faiss` + `gids.npy`, recorded here post-transfer, verified on the inference box.
+## Deploy-verified hashes (inference box, 2026-07-25)
+Byte-identical to Nexus source, confirmed on transfer:
+- `serve_index_v109_20kb/index.faiss`  sha256 `2eb738ae0ab7d5b126475039…`  (968123373 bytes)
+- `serve_index_v109_5kb/index.faiss`   sha256 `2fc19a5f4131ae79ce58c7bf…`  (968123373 bytes)
+- `v9_best.pt` (base)                   sha256 `f4bb9ad4c72addf479d20b85…`  (already on box as `best_v9_original.pt`)
+- `v10_9_encoder.pt` (overlay)          sha256 `206a203d2eeea94ba06d26a9…`
+- **Composed encoder_id VERIFIED on box under torch 2.13.0+cpu: `sha256:3b1ab6ad…` → MATCH** (152/152 keys, κ=1.2453).
+  The coherence guarantee: the encoder hashes to the id that built the index, so ENCODER-MATCH passes and queries
+  land in the exact space the index was built in.
+
+## Inference-box deployment (INTERNAL, not public)
+- Host: biosphereatlas (RTX 2060, 23GB RAM). `127.0.0.1:8100` (adaptive, CPU, `SERVE_MIN_CONFIDENCE=0.7`).
+- `/fast/atlas_v109/`; indexes carry only the 4 serving essentials (`shards/` build intermediates excluded).
+- systemd user unit `atlas-v109` (enabled + linger, Restart=on-failure). NOT in the Cloudflare tunnel — public
+  `api.biosphereatlas.com` remains the v9/V15.5 product API. Flip held pending routing decision.
+
+## Still TODO for the full datum contract (Phase 5, NOT yet executed)
+- Provenance-stamp `/place` responses `{datum_version, encoder_id, gtdb_release}` (the citability string).
+- `register` verb returning invariants (geodesic distances) not raw coordinates.
 - GTDB release tag of the taxonomy snapshot.
