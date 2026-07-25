@@ -212,3 +212,16 @@ def test_conditioning_noop_when_family_uncertain():
     v2 = build_evidence(nb, TAX, condition_deep_on_family=True)
     assert [r.as_dict() for r in v1.ranks] == [r.as_dict() for r in v2.ranks]
     _passed("conditioning is a no-op when family is uncertain (== v1)")
+
+
+def test_neighborhood_exposes_geodesic_distance_invariant():
+    """Datum surface: each neighbor carries geodesic_distance = arccos(cosine) — the gauge-free metric
+    invariant (a distance between two organisms), not raw coordinates."""
+    import math
+    ev = build_evidence([(1, 0.9), (2, 0.8)], TAX)
+    n0 = ev.neighborhood[0].as_dict()
+    assert "geodesic_distance" in n0 and "similarity" in n0
+    assert abs(n0["geodesic_distance"] - math.acos(0.9)) < 1e-3     # arccos(0.9) ≈ 0.451
+    # nearer neighbor (higher similarity) => smaller geodesic distance (monotone, metric-coherent)
+    assert ev.neighborhood[0].as_dict()["geodesic_distance"] <= ev.neighborhood[1].as_dict()["geodesic_distance"]
+    _passed("neighborhood exposes geodesic_distance (gauge-free invariant, monotone in similarity)")

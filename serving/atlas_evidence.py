@@ -58,7 +58,12 @@ class Neighbor:
     accession: str | None = None
 
     def as_dict(self):
+        # geodesic_distance = the angular (gauge-free) metric invariant, arccos(cosine). This is the
+        # datum's physical quantity — a distance between two organisms in the tree of life — as opposed to
+        # raw coordinates (which are gauge). similarity kept for backward-compat.
+        s = max(-1.0, min(1.0, self.similarity))
         return {"gid": self.gid, "similarity": round(self.similarity, 4),
+                "geodesic_distance": round(math.acos(s), 4),
                 "accession": self.accession, "lineage": self.lineage}
 
 

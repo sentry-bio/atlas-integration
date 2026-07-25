@@ -327,6 +327,25 @@ def build_app(service_holder, reload_fn=None):
     # to halve novel-FAMILY false-commit (.28->.15, measured) at a known-recall cost. Per-request `min_confidence`
     # still overrides. NOTE: measured at FAMILY level; it applies per-rank globally (genus curve not yet validated).
     DEFAULT_MIN_CONF = float(os.environ.get("SERVE_MIN_CONFIDENCE", "0.5"))
+    # ── datum provenance (the citability primitive) ─────────────────────────────────────────────
+    # Every response carries the datum it was placed in, so a placement is a CITATION, not a guess:
+    # "registered in BiosphereAtlas datum v10.9 (GTDB rXX, encoder sha256:3b1ab6ad…)". The encoder_id is
+    # the composed-weight hash the ENCODER-MATCH gate enforces — the same primitive, now surfaced.
+    DATUM_VERSION = os.environ.get("SERVE_DATUM_VERSION", "v10.9")
+    GTDB_RELEASE  = os.environ.get("SERVE_GTDB_RELEASE", "unrecorded")
+
+    def _run_place(b):
+        # `exclude` (optional): gids to drop — held-out eval (mask self / a whole family) and the
+        # "novel relatives excluding my own assembly" query. Never required.
+        svc = service_holder[0]
+        kw = {"exclude": b.get("exclude")}
+        if b.get("force_tiers") is not None and hasattr(svc, "tiers"):
+            kw["force_tiers"] = b["force_tiers"]                 # eval-only tier pin (adaptive service only)
+        out = svc.place(sequence=b.get("sequence"), reads=b.get("reads"),
+                        read_bp=b.get("read_bp"), min_confidence=b.get("min_confidence", DEFAULT_MIN_CONF), **kw)
+        out["datum"] = {"datum_version": DATUM_VERSION, "encoder_id": svc.encoder.encoder_id,
+                        "gtdb_release": GTDB_RELEASE}
+        return out
 
     @app.get("/health")
     def health():
@@ -340,16 +359,31 @@ def build_app(service_holder, reload_fn=None):
             raise HTTPException(401, "bad api key")
         b = await request.json()
         t0 = time.time()
-        # `exclude` (optional): gids to drop from the neighborhood — held-out evaluation (mask self /
-        # a whole family) and the "novel relatives excluding my own assembly" query. Never required.
-        svc = service_holder[0]
-        kw = {"exclude": b.get("exclude")}
-        if b.get("force_tiers") is not None and hasattr(svc, "tiers"):
-            kw["force_tiers"] = b["force_tiers"]                 # eval-only tier pin (adaptive service only)
-        out = svc.place(sequence=b.get("sequence"), reads=b.get("reads"),
-                        read_bp=b.get("read_bp"), min_confidence=b.get("min_confidence", DEFAULT_MIN_CONF), **kw)
+        out = _run_place(b)
         out["latency_ms"] = round((time.time() - t0) * 1000, 1)
         return out
+
+    @app.post("/register")
+    async def register(request: Request, x_api_key: str = Header(default="")):
+        """The datum-shaped surface: a query's identity IS its geodesic relationships to known reference
+        points, so this leads with the NEIGHBORHOOD (gauge-free distances to the K nearest known genomes) +
+        provenance, and presents the taxonomic call as a summary VIEW over those invariants — not raw
+        (r,θ) coordinates (which are gauge). Same one measurement as /place, re-projected invariant-first."""
+        if API_KEY and x_api_key != API_KEY:
+            raise HTTPException(401, "bad api key")
+        b = await request.json()
+        t0 = time.time()
+        o = _run_place(b)
+        return {
+            "datum": o["datum"],
+            "registered": o.get("n_reads", 0) > 0,
+            "neighborhood": o["neighborhood"],                  # geodesic distances to K nearest known genomes
+            "novelty": o["novelty"],                            # distance-to-manifold readout
+            "placement": {"call": o["call"], "resolved_to": o["resolved_to"], "novel_at": o["novel_at"],
+                          "confidence": o["confidence"], "ranks": o["ranks"]},
+            "scale": o.get("scale"), "n_reads": o.get("n_reads"),
+            "latency_ms": round((time.time() - t0) * 1000, 1),
+        }
 
     @app.post("/admin/reload")
     def reload(x_api_key: str = Header(default="")):
