@@ -1,0 +1,23 @@
+[Unit]
+Description=BiosphereAtlas v10.9 adaptive placement service (2-band router, ensembling)
+After=network.target
+
+[Service]
+Type=simple
+Environment=PYTHONPATH=/home/rohit:/home/rohit/sentrybio/scripts
+Environment=CUDA_VISIBLE_DEVICES=
+Environment=SERVE_INDEX_5KB=/zfs_raid/SentryBio/serve_index_v109_5kb
+Environment=SERVE_INDEX_20KB=/zfs_raid/SentryBio/serve_index_v109_20kb
+Environment=SERVE_DEVICE=cpu
+Environment=STRICT_ENCODER=1
+WorkingDirectory=/home/rohit/build_pipeline
+ExecStart=/home/rohit/biosphere-atlas-venv/bin/uvicorn atlas_serve:app --host 127.0.0.1 --port 8093
+Restart=on-failure
+RestartSec=5
+# NOTE: the earlier death was an external-pressure OOM (no leak — RSS flat over 480 heavy requests). A negative
+# OOMScoreAdjust would bias the kernel away from this service, but a ROOTLESS user unit cannot lower its OOM
+# score. Protection here is Restart=on-failure (auto-heals). For OOM-victim protection add a ROOT drop-in with
+# OOMScoreAdjust=-500 (needs CAP_SYS_RESOURCE), or run this as a system-level unit.
+
+[Install]
+WantedBy=default.target

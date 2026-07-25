@@ -1,0 +1,22 @@
+# data + model artifacts (live on /zfs_raid, referenced by spec, never committed)
+*.faiss
+*.npy
+*.npz
+*.pt
+*.gz
+*.fasta
+*.fa
+*.json.data
+# index / calibration payloads (provenance recorded in docs/DATUM.md, not the blobs)
+serve_index_*/
+conformal.json
+calibration.json
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+# scratch
+*.log
+tmp/
