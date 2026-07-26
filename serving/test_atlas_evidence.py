@@ -225,3 +225,20 @@ def test_neighborhood_exposes_geodesic_distance_invariant():
     # nearer neighbor (higher similarity) => smaller geodesic distance (monotone, metric-coherent)
     assert ev.neighborhood[0].as_dict()["geodesic_distance"] <= ev.neighborhood[1].as_dict()["geodesic_distance"]
     _passed("neighborhood exposes geodesic_distance (gauge-free invariant, monotone in similarity)")
+
+
+def test_conformal_fathom_two_readouts_one_measurement():
+    """With a shipped conformal null, the SAME neighbors yield a second readout — the off-manifold projection:
+    distance-to-manifold + typicality. A query near its family is typical; one isolated from all families is
+    novel. Without a null, novelty gracefully falls back to the support proxy (no typicality)."""
+    conformal = {"global": [0.05, 0.08, 0.10, 0.12, 0.15, 0.20, 0.25, 0.30], "per_family": {}, "min_family": 8}
+    ev_known = build_evidence([(1, 0.95), (2, 0.93)], TAX, conformal=conformal)   # near Lactobacillaceae members
+    nk = ev_known.novelty()
+    assert nk["typicality"] is not None and nk["distance_to_manifold"] is not None
+    ev_novel = build_evidence([(1, 0.30), (4, 0.28)], TAX, conformal=conformal)   # far from its predicted family
+    nn = ev_novel.novelty()
+    assert nn["typicality"] < nk["typicality"]                     # more isolated -> less typical -> more novel
+    assert nn["flag"] in ("off-manifold", "novel-tail") and nk["flag"] == "known"
+    # graceful fallback: no conformal null -> support-proxy novelty, typicality is None (not fabricated)
+    assert build_evidence([(1, 0.95)], TAX).novelty()["typicality"] is None
+    _passed("conformal fathom: two readouts from one measurement; isolated<typical; graceful support fallback")

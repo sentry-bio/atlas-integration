@@ -47,13 +47,14 @@ def meta_bp_ntok(meta: dict):
 # ── the pure orchestration (dependency-injected; no torch/faiss here) ───────────────────────────
 class AtlasService:
     """Wires L2 + L1 + L3.  Stateless per request; the only state is the loaded artifact + encoder."""
-    def __init__(self, tokenizer, encoder, index, taxonomy, read_policy, calib=None, meta=None, k=15):
+    def __init__(self, tokenizer, encoder, index, taxonomy, read_policy, calib=None, meta=None, k=15, conformal=None):
         self.tokenizer = tokenizer        # L2 Tokenizer
         self.encoder = encoder            # L2 EncoderModule (has .encode and .encoder_id)
         self.index = index                # L1 backend (.search(qvecs, k, exclude) -> [(gid, sim)])
         self.taxonomy = taxonomy          # gid -> {rank: taxon}
         self.read_policy = read_policy    # L2.5 ReadPolicy
-        self.calib = calib                # 2D-shaped calibration (or None -> confidence == margin)
+        self.calib = calib                # margin calibration (or None -> confidence == margin)
+        self.conformal = conformal        # fathom null (or None -> novelty == support proxy)
         self.meta = meta or {}
         self.k = k
 
@@ -63,7 +64,7 @@ class AtlasService:
         frags, bp = self.read_policy.reads_from(sequence=sequence, reads=reads, read_bp=read_bp)
         if not frags:
             # decision #8: no usable reads is EVIDENCE (maximally novel), not a 400.
-            ev = build_evidence([], self.taxonomy, n_reads=0, calib=self.calib)
+            ev = build_evidence([], self.taxonomy, n_reads=0, calib=self.calib, conformal=self.conformal)
             return ev.as_dict(min_confidence)
         ntok = self.read_policy.ntok_for(bp)
         rows = [self.tokenizer.tokenize(f, ntok) for f in frags]
@@ -71,7 +72,7 @@ class AtlasService:
         neighbors = self.index.search(qvecs, self.k, exclude=exclude)   # L1
         neighbors = rerank(neighbors)                              # identity seam (L3 #6b)
         ev = build_evidence(neighbors, self.taxonomy, n_reads=len(rows),
-                            k_neighborhood=self.k, calib=self.calib)
+                            k_neighborhood=self.k, calib=self.calib, conformal=self.conformal)
         return ev.as_dict(min_confidence)
 
     def health(self) -> dict:
@@ -111,11 +112,11 @@ class AdaptiveService:
     -> search the tier index(es) -> (fuse rank-normalized in the crossover band) -> pool across reads -> L3.
     Emits the same Evidence payload PLUS `scale.tier_used` and a `cross_scale.agreed` DIAGNOSTIC (surfaced,
     never fed to the confidence — it's redundant with margin, proven)."""
-    def __init__(self, tokenizer, encoder, tiers, taxonomy, router, read_policy, calib=None, meta=None, k=15):
+    def __init__(self, tokenizer, encoder, tiers, taxonomy, router, read_policy, calib=None, meta=None, k=15, conformal=None):
         self.tokenizer = tokenizer; self.encoder = encoder
         self.tiers = tiers            # {name: {"index": FaissIndex, "ntok": int, "bp": int, "meta": dict}}
         self.taxonomy = taxonomy; self.router = router; self.read_policy = read_policy
-        self.calib = calib; self.meta = meta or {}; self.k = k
+        self.calib = calib; self.conformal = conformal; self.meta = meta or {}; self.k = k
 
     def _family_top(self, neighbors):
         ev = build_evidence(neighbors, self.taxonomy, k_neighborhood=self.k)
@@ -127,7 +128,7 @@ class AdaptiveService:
         bp = read_bp or 20000                                    # default tile = native 20kb
         frags, bp = self.read_policy.reads_from(sequence=sequence, reads=reads, read_bp=bp)
         if not frags:
-            return build_evidence([], self.taxonomy, n_reads=0, calib=self.calib).as_dict(min_confidence)
+            return build_evidence([], self.taxonomy, n_reads=0, calib=self.calib, conformal=self.conformal).as_dict(min_confidence)
         # force_tiers (eval only) pins the tier(s) instead of the router — for A/B'ing routing vs each single arm.
         tier_names = [t for t in force_tiers if t in self.tiers] if force_tiers else self.router.route(bp)
         per_tier_raw = {}                                        # name -> pooled raw neighbors across reads
@@ -141,7 +142,8 @@ class AdaptiveService:
         else:
             pooled = per_tier_raw[tier_names[0]]                 # single tier -> raw sims (validated)
         pooled = rerank(pooled)
-        ev = build_evidence(pooled, self.taxonomy, n_reads=len(frags), k_neighborhood=self.k, calib=self.calib)
+        ev = build_evidence(pooled, self.taxonomy, n_reads=len(frags), k_neighborhood=self.k,
+                            calib=self.calib, conformal=self.conformal)
         out = ev.as_dict(min_confidence)
         out["scale"] = {"read_bp": bp, "tier_used": "+".join(tier_names)}
         if len(tier_names) > 1:                                  # cross-scale DIAGNOSTIC (not a confidence input)
@@ -278,13 +280,16 @@ def load_service(index_dir, v9_path, overlay_path, vocab_path, ftax_path, tok_di
     calib_path = os.path.join(index_dir, "calibration.json")
     calib = _json.load(open(calib_path)) if os.path.exists(calib_path) else None
     log(f"[load] calibration: {'loaded' if calib else 'none (confidence == raw margin)'}")
+    conf_path = os.path.join(index_dir, "conformal.json")
+    conformal = _json.load(open(conf_path)) if os.path.exists(conf_path) else None
+    log(f"[load] conformal fathom: {'loaded' if conformal else 'none (novelty == support proxy)'}")
 
     if run_verify:
         rep = verify_gate(encoder, index, taxonomy, tok_dir, ntok, log=log)
         meta = {**meta, "verify": rep}
 
     read_policy = ReadPolicy(index_bp=bp, index_ntok=ntok)
-    return AtlasService(tokenizer, encoder, index, taxonomy, read_policy, calib=calib, meta=meta, k=k)
+    return AtlasService(tokenizer, encoder, index, taxonomy, read_policy, calib=calib, meta=meta, k=k, conformal=conformal)
 
 
 def load_adaptive_service(tier_dirs, v9_path, overlay_path, vocab_path, ftax_path, tok_dir,
@@ -297,7 +302,7 @@ def load_adaptive_service(tier_dirs, v9_path, overlay_path, vocab_path, ftax_pat
     log(f"[load] encoder {encoder.encoder_id} on {device}")
     tokenizer = Tokenizer(vocab_path)
     tax_list = _json.load(open(ftax_path)); taxonomy = {g: tax_list[g] for g in range(len(tax_list))}
-    tiers, calib = {}, None
+    tiers, calib, conformal = {}, None, None
     for name, d in tier_dirs.items():
         meta = _json.load(open(os.path.join(d, "meta.json"))); bp, ntok = meta_bp_ntok(meta)
         assert_encoder_matches(encoder, meta, strict=strict_encoder, log=log)   # gate EACH tier
@@ -307,12 +312,15 @@ def load_adaptive_service(tier_dirs, v9_path, overlay_path, vocab_path, ftax_pat
         tiers[name] = {"index": idx, "ntok": ntok, "bp": bp, "meta": meta, "dir": d}
         cp = os.path.join(d, "calibration.json")
         if calib is None and os.path.exists(cp): calib = _json.load(open(cp))   # margin calib (tier-agnostic)
+        fp = os.path.join(d, "conformal.json")
+        if conformal is None and os.path.exists(fp): conformal = _json.load(open(fp))   # fathom null (tier-agnostic)
         log(f"[load] tier '{name}': {meta['scale']} bp={bp} ntok={ntok} ({idx.idx.ntotal:,} vec)")
     router = Router(routing["bands"]) if routing else Router.default(tiers.keys())
-    log(f"[load] router bands: {router.bands}; calibration: {'loaded' if calib else 'none'}")
+    log(f"[load] router bands: {router.bands}; calibration: {'loaded' if calib else 'none'}; "
+        f"fathom: {'loaded' if conformal else 'none'}")
     read_policy = ReadPolicy(index_bp=20000, index_ntok=4096)                # tiling only; ntok comes from tier
     meta = {"mode": "adaptive", "tiers": {n: t["meta"]["scale"] for n, t in tiers.items()}}
-    return AdaptiveService(tokenizer, encoder, tiers, taxonomy, router, read_policy, calib=calib, meta=meta, k=k)
+    return AdaptiveService(tokenizer, encoder, tiers, taxonomy, router, read_policy, calib=calib, meta=meta, k=k, conformal=conformal)
 
 
 # ── FastAPI app (lazy import) ───────────────────────────────────────────────────────────────────

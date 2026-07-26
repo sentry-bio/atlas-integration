@@ -104,19 +104,27 @@ class Evidence:
     """Everything the model knows about a query.  Computed ONCE; verdicts are views over it."""
     ranks: list                     # FULL ladder, always len(RANKS) (decision #2)
     neighborhood: list              # top-K Neighbor, nearest first (decision #3)
-    support: float                  # novelty axis (decision #4)
+    support: float                  # neighborhood density (regime proxy)
     n_reads: int
     scorer_version: str = SCORER_VERSION
+    manifold: dict = None           # conformal fathom readout {distance_to_manifold, typicality} or None (decision #4b)
 
     def novelty(self) -> dict:
-        """The explicit novelty axis (decision #4).  Regime read straight off support + neighborhood."""
+        """Novelty as the OFF-manifold projection of the one measurement (place = on-manifold, this = off).
+        When a conformal null is shipped: calibrated DISTANCE-TO-MANIFOLD (typicality p-value) — gauge-free,
+        per-family density-normalized, and (measured) able to separate on-manifold-ambiguous from off-manifold-
+        novel where margin cannot (AUROC 0.68 vs 0.53). Falls back to the raw support proxy when no null ships."""
         if not self.neighborhood:
-            flag = "no-neighbor"        # nothing near this -> maximally novel (decision #8)
-        elif self.support < 0.5:
-            flag = "novel-tail"         # neighbors exist but distant -> the tool's target regime
-        else:
-            flag = "known"
-        return {"support": round(self.support, 4), "flag": flag}
+            return {"support": round(self.support, 4), "flag": "no-neighbor",
+                    "distance_to_manifold": None, "typicality": 0.0}
+        if self.manifold is not None:
+            typ = self.manifold["typicality"]
+            flag = "off-manifold" if typ < 0.05 else ("novel-tail" if typ < 0.2 else "known")
+            return {"support": round(self.support, 4), "flag": flag,
+                    "distance_to_manifold": round(self.manifold["distance_to_manifold"], 4),
+                    "typicality": round(typ, 4)}
+        flag = "novel-tail" if self.support < 0.5 else "known"        # legacy support-threshold fallback
+        return {"support": round(self.support, 4), "flag": flag, "distance_to_manifold": None, "typicality": None}
 
     def decide(self, min_confidence: float = 0.5, require_nesting: bool = False) -> Decision:
         """Threshold the evidence at an operating point.  The dial (decision #1).
@@ -217,21 +225,52 @@ def score_ranks(neighbors, taxonomy_of, gamma: float = GAMMA, calib: dict | None
     return out
 
 
+def _isolation(neighbors, taxonomy_of, family, kiso: int = 5) -> float:
+    """Conformal nonconformity score: 1 - mean(top-k similarity to the predicted FAMILY's members among the
+    neighbors).  High = the query is far even from its nearest family = off-manifold/novel.  Pure; mirrors
+    fathom's isolation (distance to the k nearest members of the top taxon), read from similarities."""
+    sims = sorted((s for gid, s in neighbors if taxonomy_of.get(gid, {}).get("family") == family), reverse=True)[:kiso]
+    return 1.0 - (sum(sims) / len(sims) if sims else 0.0)
+
+
+def _typicality(iso: float, family, conformal: dict) -> float:
+    """Conformal p-value = fraction of genuine members at least as isolated as the query.  Low p = novel.
+    Per-family ECDF when the family has >= min_family calibration members (density-normalized — a distance
+    that means the same in dense and sparse clades); else the global null (robust fallback)."""
+    import bisect
+    pf = conformal.get("per_family", {}).get(family)
+    arr = pf if (pf is not None and len(pf) >= conformal.get("min_family", 8)) else conformal.get("global", [])
+    n = len(arr)
+    if n == 0:
+        return 1.0
+    ge = n - bisect.bisect_left(arr, iso)                          # arr sorted ascending; count of scores >= iso
+    return (1.0 + ge) / (n + 1.0)
+
+
 def build_evidence(neighbors, taxonomy_of, n_reads: int = 1, k_neighborhood: int = 20,
                    gamma: float = GAMMA, calib: dict | None = None,
-                   accession_of=None, condition_deep_on_family: bool = False) -> Evidence:
+                   accession_of=None, condition_deep_on_family: bool = False,
+                   conformal: dict | None = None) -> Evidence:
     """Assemble the full Evidence from a retrieved neighborhood.  The one pure call (L3 entry point).
 
     Degenerate inputs (empty neighbors) return a valid all-gap Evidence with support=0 — never raise
     (decision #8).  The rerank seam (decision #6b) lives OUTSIDE this function: search -> [rerank] -> here.
     condition_deep_on_family (default OFF) forwards to the scorer_v2 genus/species conditioning (decision #5b).
+    conformal (default None): a shipped null {global, per_family, min_family}.  When present, the SAME neighbors
+    produce a second readout — the conformal distance-to-manifold (fathom) — off the family the vote resolved to.
     """
     neighbors = list(neighbors)
     ranks = score_ranks(neighbors, taxonomy_of, gamma=gamma, calib=calib,
                         condition_deep_on_family=condition_deep_on_family)
     support = _support(neighbors)
     hood = _neighborhood(neighbors, taxonomy_of, k_neighborhood, accession_of)
-    return Evidence(ranks=ranks, neighborhood=hood, support=support, n_reads=n_reads)
+    manifold = None
+    if conformal and neighbors:                                    # fathom: off-manifold readout of the one measurement
+        fam = next((r.top for r in ranks if r.rank == "family" and not r.gap), None)
+        if fam:
+            iso = _isolation(neighbors, taxonomy_of, fam)
+            manifold = {"distance_to_manifold": iso, "typicality": _typicality(iso, fam, conformal)}
+    return Evidence(ranks=ranks, neighborhood=hood, support=support, n_reads=n_reads, manifold=manifold)
 
 
 # ── the rerank seam (decision #6b) — identity today, a precision lever later ────────────────────
