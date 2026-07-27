@@ -120,3 +120,24 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def test_sequence_complexity_and_lowcomplexity_filter():
+    """Front-door validity gate: real DNA passes (~0.83-0.99), degenerate input is flagged (<0.61, measured),
+    and the filter drops garbage reads per-read while keeping good ones in the same ensemble."""
+    import random
+    from atlas_encoder import sequence_complexity, ReadPolicy
+    rng = random.Random(1)
+    real = "".join(rng.choice("ACGT") for _ in range(2000))
+    assert sequence_complexity(real) > 0.70                        # real genomic-like DNA passes
+    assert sequence_complexity("A" * 2000) < 0.05                  # homopolymer (all-A / all-N->A) flagged
+    assert sequence_complexity("ACGT" * 500) < 0.30               # simple repeat flagged
+    assert sequence_complexity("N" * 2000) == 0.0                  # no ACGT content -> 0
+    rp = ReadPolicy(20000, 4096, min_complexity=0.70)
+    real20 = "".join(rng.choice("ACGT") for _ in range(20000))
+    assert len(rp.reads_from(reads=[real20])[0]) == 1              # real read kept
+    assert len(rp.reads_from(reads=["N" * 20000])[0]) == 0         # garbage dropped
+    assert len(rp.reads_from(reads=[real20, "N" * 20000])[0]) == 1  # per-read: drop garbage, keep real
+    # off by default (min_complexity=0.0): nothing dropped (backward compatible)
+    assert len(ReadPolicy(20000, 4096).reads_from(reads=["A" * 20000])[0]) == 1
+    print("  ok  front-door filter: real passes, degenerate flagged, per-read, off-by-default")

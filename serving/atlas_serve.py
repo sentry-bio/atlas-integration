@@ -44,6 +44,18 @@ def meta_bp_ntok(meta: dict):
     raise ValueError(f"meta has neither bp/ntok nor a known scale: {meta}")
 
 
+def _input_quality(reads, sequence, min_complexity):
+    """Distinguish WHY there are no usable fragments — so garbage is labeled honestly, not as false-typical.
+    'low-complexity' (all-N / homopolymer / simple-repeat, filtered at the front door) vs 'too-short' vs 'no-input'."""
+    from atlas_encoder import sequence_complexity
+    raw = [s for s in ((reads or []) + ([sequence] if sequence else [])) if s]
+    if not raw:
+        return "no-input"
+    if min_complexity > 0.0 and all(sequence_complexity(s) < min_complexity for s in raw):
+        return "low-complexity"
+    return "too-short"
+
+
 # ── the pure orchestration (dependency-injected; no torch/faiss here) ───────────────────────────
 class AtlasService:
     """Wires L2 + L1 + L3.  Stateless per request; the only state is the loaded artifact + encoder."""
@@ -64,8 +76,9 @@ class AtlasService:
         frags, bp = self.read_policy.reads_from(sequence=sequence, reads=reads, read_bp=read_bp)
         if not frags:
             # decision #8: no usable reads is EVIDENCE (maximally novel), not a 400.
-            ev = build_evidence([], self.taxonomy, n_reads=0, calib=self.calib, conformal=self.conformal)
-            return ev.as_dict(min_confidence)
+            d = build_evidence([], self.taxonomy, n_reads=0, calib=self.calib, conformal=self.conformal).as_dict(min_confidence)
+            d["input_quality"] = _input_quality(reads, sequence, self.read_policy.min_complexity)
+            return d
         ntok = self.read_policy.ntok_for(bp)
         rows = [self.tokenizer.tokenize(f, ntok) for f in frags]
         qvecs = self.encoder.encode(rows)                          # L2 (the one GPU touch)
@@ -128,7 +141,9 @@ class AdaptiveService:
         bp = read_bp or 20000                                    # default tile = native 20kb
         frags, bp = self.read_policy.reads_from(sequence=sequence, reads=reads, read_bp=bp)
         if not frags:
-            return build_evidence([], self.taxonomy, n_reads=0, calib=self.calib, conformal=self.conformal).as_dict(min_confidence)
+            d = build_evidence([], self.taxonomy, n_reads=0, calib=self.calib, conformal=self.conformal).as_dict(min_confidence)
+            d["input_quality"] = _input_quality(reads, sequence, self.read_policy.min_complexity)
+            return d
         # force_tiers (eval only) pins the tier(s) instead of the router — for A/B'ing routing vs each single arm.
         tier_names = [t for t in force_tiers if t in self.tiers] if force_tiers else self.router.route(bp)
         per_tier_raw = {}                                        # name -> pooled raw neighbors across reads
@@ -288,7 +303,7 @@ def load_service(index_dir, v9_path, overlay_path, vocab_path, ftax_path, tok_di
         rep = verify_gate(encoder, index, taxonomy, tok_dir, ntok, log=log)
         meta = {**meta, "verify": rep}
 
-    read_policy = ReadPolicy(index_bp=bp, index_ntok=ntok)
+    read_policy = ReadPolicy(index_bp=bp, index_ntok=ntok, min_complexity=float(os.environ.get("SERVE_MIN_COMPLEXITY","0.0")))
     return AtlasService(tokenizer, encoder, index, taxonomy, read_policy, calib=calib, meta=meta, k=k, conformal=conformal)
 
 
@@ -318,7 +333,8 @@ def load_adaptive_service(tier_dirs, v9_path, overlay_path, vocab_path, ftax_pat
     router = Router(routing["bands"]) if routing else Router.default(tiers.keys())
     log(f"[load] router bands: {router.bands}; calibration: {'loaded' if calib else 'none'}; "
         f"fathom: {'loaded' if conformal else 'none'}")
-    read_policy = ReadPolicy(index_bp=20000, index_ntok=4096)                # tiling only; ntok comes from tier
+    read_policy = ReadPolicy(index_bp=20000, index_ntok=4096,
+                             min_complexity=float(os.environ.get("SERVE_MIN_COMPLEXITY","0.0")))  # tiling only; ntok from tier
     meta = {"mode": "adaptive", "tiers": {n: t["meta"]["scale"] for n, t in tiers.items()}}
     return AdaptiveService(tokenizer, encoder, tiers, taxonomy, router, read_policy, calib=calib, meta=meta, k=k, conformal=conformal)
 

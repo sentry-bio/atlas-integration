@@ -94,6 +94,24 @@ def _to_bytes(v):
     raise TypeError(f"un-hashable weight type: {type(v)}")
 
 
+# ── front-door validity gate ────────────────────────────────────────────────────────────────
+def sequence_complexity(s: str, k: int = 4) -> float:
+    """Normalized k-mer entropy of the ACGT content — the low-complexity signal.  Real genomic DNA sits
+    ~0.83-0.99 (measured, n=250: 1%ile 0.831); homopolymers/simple-repeats/degenerate input sit < 0.61.
+    Returns 0.0 for empty / no-ACGT (e.g. all-N).  Cheap, encoder-independent — runs before any encode so
+    garbage that would collapse near a manifold point (reading as 'confidently typical') never gets there."""
+    import math
+    from collections import Counter
+    t = "".join(c for c in s.upper() if c in "ACGT")
+    if len(t) < k:
+        return 0.0
+    kk = [t[i:i + k] for i in range(len(t) - k + 1)]
+    c = Counter(kk); tot = len(kk)
+    h = -sum((n / tot) * math.log2(n / tot) for n in c.values())
+    hmax = math.log2(min(4 ** k, tot))
+    return h / hmax if hmax > 0 else 0.0
+
+
 # ── read policy (Layer 2.5) — the measured tiling/routing lever, kept explicit ─────────────────
 @dataclass
 class ReadPolicy:
@@ -103,6 +121,7 @@ class ReadPolicy:
     index_bp: int
     index_ntok: int
     max_reads: int = 24                 # ensemble cap: subsample <= this many evenly-spaced tiles (bounds cost)
+    min_complexity: float = 0.0         # front-door: drop reads with k-mer entropy < this (0 = off; deploy 0.70)
 
     def ntok_for(self, bp: int) -> int:
         return max(60, round(bp * self.index_ntok / self.index_bp))
@@ -127,6 +146,11 @@ class ReadPolicy:
             if len(frags) > self.max_reads:
                 idx = sorted({round(i * (len(frags) - 1) / (self.max_reads - 1)) for i in range(self.max_reads)})
                 frags = [frags[i] for i in idx]
+        # front-door validity gate: drop low-complexity fragments (all-N / homopolymer / simple-repeat) BEFORE
+        # they reach the encoder. Applies to both the reads and the sequence path; when it empties the set, the
+        # caller's no-frags path returns maximally-novel evidence (garbage -> honest abstention, not false-typical).
+        if self.min_complexity > 0.0:
+            frags = [f for f in frags if sequence_complexity(f) >= self.min_complexity]
         return frags, bp
 
 
