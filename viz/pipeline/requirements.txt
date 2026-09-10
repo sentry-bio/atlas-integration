@@ -1,0 +1,3 @@
+numpy
+faiss-cpu       # or faiss-gpu on a CUDA box — build_bundle.py runs on either
+scipy           # verification/ scripts only (spearmanr)

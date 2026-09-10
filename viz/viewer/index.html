@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Biosphere Atlas — Morphospace (v10.9)</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #000; color: #fff; font-family: 'SF Mono', 'Fira Code', monospace; overflow: hidden; }
+  canvas { display: block; }
+  .panel { position: absolute; background: rgba(0,0,0,0.72); padding: 14px 16px; border-radius: 8px;
+    font-size: 12px; line-height: 1.6; backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.1); }
+  #info { top: 16px; left: 16px; max-width: 330px; }
+  #info h1 { font-size: 15px; margin-bottom: 8px; color: #8af; }
+  #info .stat { color: #aaa; } #info .stat span { color: #fff; }
+  #gstat { margin-top: 6px; font-size: 10px; }
+  #gstat.loading { color: #c96; } #gstat.ready { color: #6c9; }
+  #gstat #feat, #gstat #feat2 { color: #8af; cursor: pointer; display: inline-block; margin-top: 3px; }
+  #gstat #feat:hover, #gstat #feat2:hover { text-decoration: underline; }
+  #gstat #feat2 { color: #fb6; }
+  #controls { top: 16px; right: 16px; font-size: 11px; }
+  #controls label { display: block; margin: 4px 0; cursor: pointer; }
+  #controls input[type="range"] { width: 120px; vertical-align: middle; }
+  #proj { margin-top: 8px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 8px; }
+  #proj .lbl { color: #667; font-size: 9px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
+  #proj button { display:block; width:100%; margin:3px 0; padding:5px 10px; background:rgba(255,255,255,0.06);
+    color:#fff; border:1px solid rgba(255,255,255,0.18); border-radius:4px; cursor:pointer; font-family:inherit; font-size:11px; }
+  #proj button:hover { background:rgba(255,255,255,0.14); }
+  #proj button.active { background:rgba(100,150,255,0.28); border-color:#8af; color:#8af; }
+  #legend { bottom: 16px; left: 16px; font-size: 11px; }
+  #legend .item { display: flex; align-items: center; margin: 3px 0; }
+  #legend .dot { width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; }
+  #tooltip { position: absolute; display: none; pointer-events: none; background: rgba(0,0,0,0.88);
+    padding: 9px 13px; border-radius: 6px; font-size: 11px; line-height: 1.5; max-width: 280px;
+    backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.15); }
+  #tooltip .acc { color: #8af; font-weight: bold; } #tooltip .tax { color: #aaa; }
+  #tooltip .type { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; }
+  #constel { bottom: 16px; right: 16px; max-width: 300px; display: none; }
+  #constel h2 { font-size: 13px; color: #8af; margin-bottom: 6px; }
+  #constel .foc { color: #fff; font-weight: bold; } #constel .sub { color: #999; font-size: 10px; margin-bottom: 8px; }
+  #constel .split { display: flex; gap: 12px; margin: 6px 0; }
+  #constel .chip { font-size: 10px; padding: 3px 8px; border-radius: 4px; }
+  #constel .same { background: rgba(90,200,240,0.18); color: #6cf; }
+  #constel .cross { background: rgba(255,150,40,0.18); color: #fb6; }
+  #constel .nblist { margin-top: 6px; font-size: 10px; max-height: 150px; overflow-y: auto; }
+  #constel .nb { display: flex; justify-content: space-between; padding: 2px 0; color: #bbb; }
+  #constel .nb .xf { color: #fb6; } #constel .nb .sf { color: #6cf; }
+  #constel button { margin-top: 8px; width: 100%; padding: 6px; background: rgba(255,255,255,0.08);
+    color: #fff; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; cursor: pointer; font-family: inherit; }
+  #constel button:hover { background: rgba(255,255,255,0.16); }
+  .hint { position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%); font-size: 11px;
+    color: #778; background: rgba(0,0,0,0.5); padding: 6px 14px; border-radius: 20px; }
+  .loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 18px; color: #8af; }
+</style>
+</head>
+<body>
+<div id="info" class="panel">
+  <h1>Biosphere Atlas</h1>
+  <div class="stat">Genomes: <span id="n-points">—</span></div>
+  <div class="stat">κ: <span id="kappa">—</span></div>
+  <div class="stat" id="proj-desc" style="margin-top:6px;font-size:10px;color:#888;border-top:1px solid rgba(255,255,255,0.06);padding-top:6px;"></div>
+  <div class="stat" style="font-size:10px;color:#666;">True neighbors: <span style="color:#9cf">57% family · 97% domain</span></div>
+  <div id="gstat" class="loading">◌ loading neighbor graph…</div>
+  <div id="stamp" style="margin-top:6px;font-size:9px;color:#556;border-top:1px solid rgba(255,255,255,0.05);padding-top:5px;"></div>
+</div>
+<div id="controls" class="panel">
+  <label>Point size: <input type="range" id="size-slider" min="0.2" max="3" step="0.05" value="0.55"></label>
+  <label>Opacity: <input type="range" id="opacity-slider" min="0.1" max="1" step="0.05" value="0.85"></label>
+  <label><input type="checkbox" id="show-ball" checked> Show ball boundary</label>
+  <label><input type="checkbox" id="show-labels" checked> Domain labels</label>
+  <label><input type="checkbox" id="color-novelty"> Color by novelty</label>
+  <label><input type="checkbox" id="density-aware" checked> Density-aware (dim crowds)</label>
+  <div id="proj">
+    <div class="lbl">Projection</div>
+    <button data-m="lda" class="active">Figure (discriminant)</button>
+    <button data-m="datum">Datum (θ · n=2)</button>
+    <button data-m="morph">Morphospace (novelty depth)</button>
+    <button data-m="pca">Canonical (PCA)</button>
+  </div>
+</div>
+<div id="legend" class="panel">
+  <div id="legend-domain">
+    <div class="item"><div class="dot" style="background:rgb(77,122,217)"></div> Bacteria</div>
+    <div class="item"><div class="dot" style="background:rgb(217,92,71)"></div> Archaea</div>
+    <div class="item"><div class="dot" style="background:rgb(89,191,107)"></div> Eukaryota</div>
+    <div class="item"><div class="dot" style="background:rgb(224,148,56)"></div> Mitochondria</div>
+    <div class="item"><div class="dot" style="background:rgb(209,199,64)"></div> Chloroplasts</div>
+  </div>
+  <div id="legend-novelty" style="display:none">
+    <div style="font-size:10px;color:#888;margin-bottom:4px;">Novelty (distance to manifold)</div>
+    <div style="height:10px;width:160px;border-radius:2px;background:linear-gradient(90deg,rgb(38,102,242),rgb(230,230,51),rgb(242,38,26));"></div>
+    <div class="item" style="justify-content:space-between;width:160px;font-size:9px;color:#888;margin-top:2px;"><span>typical</span><span>novel to science</span></div>
+  </div>
+</div>
+<div id="tooltip"></div>
+<div id="constel" class="panel">
+  <h2>Neighborhood</h2>
+  <div class="foc" id="c-foc">—</div>
+  <div class="sub" id="c-sub">—</div>
+  <div class="split"><span class="chip same" id="c-same">— same family</span><span class="chip cross" id="c-cross">— cross-family</span></div>
+  <div class="nblist" id="c-list"></div>
+  <button onclick="clearFocus()">Clear (Esc)</button>
+</div>
+<div class="hint" id="hint">Drag to orbit · Scroll to zoom · Click a genome to see its true neighbors</div>
+<div class="loading" id="loading">Loading atlas…</div>
+
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/" } }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.01, 100);
+camera.position.set(1.25, 0.85, 2.05);
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+document.body.appendChild(renderer.domElement);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true; controls.dampingFactor = 0.05;
+const CAM0 = { pos: new THREE.Vector3(1.25,0.85,2.05), tgt: new THREE.Vector3(0,0,0) };
+const raycaster = new THREE.Raycaster(); raycaster.params.Points.threshold = 0.012;
+const mouse = new THREE.Vector2();
+const tooltip = document.getElementById('tooltip');
+
+const DOMCOL = [[0.30,0.48,0.85],[0.85,0.36,0.28],[0.35,0.75,0.42],[0.50,0.50,0.50],[0.88,0.58,0.22],[0.82,0.78,0.25],[0.70,0.48,0.72]];
+const DOMNAME = ['bacteria','archaea','eukaryota','other','mitochondrion','chloroplast','organelle'];
+const PROJ_DESC = {
+  lda: 'Viewpoint chosen to display <span style="color:#9cf">domain structure</span> (discriminant axes). Rigid projection of the 129D embedding — distances undistorted, nothing moved toward its label.<br>Center: prokaryotic core · rim: derived (eukaryotes, organelles).',
+  datum: 'Canonical datum chart (<span style="color:#c96">candidate-1.0</span>, n=2 disk): angle = θ, prime meridian <i>E. coli</i> K-12 = 0°, chirality by <i>M. jannaschii</i>.<br>Radius <span style="color:#886">advisory</span> (backbone-plane magnitude). Certified: phylum→family; fades through genus.',
+  morph: 'Radius = <span style="color:#c96">novelty</span> · center: typical (near known life) · edge: novel frontier.<br>Angle: 20D shadow. Truth: novelty color + neighbor edges.',
+  pca: 'Position is a global <span style="color:#999">index</span> (3D shadow of a ~20D space).<br>Truth rides full-129D channels: novelty color + neighbor edges.'
+};
+let META, POS, NOV, DOM, FAM, GEN, SP, DEN, ACC=null, NB=null, NDU=null, LDA_POS=null, FIGMETA=null, THETA=null, THR=null;
+let APOS, PROJ='lda';
+let N=0, K=30, graphReady=false;
+let geom, mat, pointsMesh, edgeLines=null, originalColors, ball, labelGroup=null;
+
+let BV = 'dev';
+const fbuf = async u => (await fetch(u + '?v=' + BV)).arrayBuffer();
+
+// ── bundle integrity: no orphan claims ──
+function assertBundle(bufs){
+  const n=META.n, K=META.K;
+  const expect = { 'positions.bin':12*n, 'novelty.bin':4*n, 'domain.bin':n, 'density.bin':4*n,
+    'family_idx.bin':4*n, 'genus_idx.bin':4*n, 'species_idx.bin':4*n };
+  const fail = [];
+  for(const [f,b] of Object.entries(bufs)){
+    if(expect[f]!==undefined && b.byteLength!==expect[f]) fail.push(`${f}: ${b.byteLength} ≠ n-derived ${expect[f]}`);
+    if(META.files && META.files[f]!==undefined && b.byteLength!==META.files[f]) fail.push(`${f}: ${b.byteLength} ≠ stamped ${META.files[f]}`);
+  }
+  if(!META.instrument) fail.push('meta.json missing instrument stamp');
+  if(typeof META.dist_scale!=='number' || !(K>0)) fail.push('meta.json missing K/dist_scale');
+  if(fail.length){
+    const el=document.getElementById('loading');
+    el.textContent='Bundle integrity check FAILED — refusing to render. '+fail[0];
+    el.style.color='#e66'; throw new Error('bundle integrity: '+fail.join(' | '));
+  }
+}
+function assertGraph(nb, ndu){
+  const want=4*META.n*META.K;
+  if(nb.byteLength!==want || ndu.byteLength!==want/4){
+    const g=document.getElementById('gstat'); g.className='loading';
+    g.textContent='✗ neighbor graph failed integrity check — constellations disabled';
+    throw new Error('graph integrity');
+  }
+}
+
+function computeAPOS(){
+  APOS = new Float32Array(N*3);
+  if(PROJ==='pca'){ APOS.set(POS); return; }
+  if(PROJ==='lda' && LDA_POS){ APOS.set(LDA_POS); return; }
+  if(PROJ==='datum' && THETA){
+    for(let i=0;i<N;i++){
+      const r=0.12+0.78*THR[i];
+      APOS[i*3]=r*Math.cos(THETA[i]); APOS[i*3+1]=0; APOS[i*3+2]=-r*Math.sin(THETA[i]);
+    }
+    return;
+  }
+  for(let i=0;i<N;i++){
+    const x=POS[i*3], y=POS[i*3+1], z=POS[i*3+2];
+    const L=Math.hypot(x,y,z);
+    const r=0.12 + 0.78*NOV[i];
+    if(L<1e-5){ APOS[i*3]=APOS[i*3+1]=APOS[i*3+2]=0; }
+    else { APOS[i*3]=x/L*r; APOS[i*3+1]=y/L*r; APOS[i*3+2]=z/L*r; }
+  }
+}
+
+async function boot(){
+  META = await (await fetch('meta.json', {cache:'no-store'})).json();
+  if(META.instrument && META.instrument.bundle_version) BV = META.instrument.bundle_version;
+  N = META.n; K = META.K;
+  const names=['positions.bin','novelty.bin','domain.bin','family_idx.bin','genus_idx.bin','species_idx.bin','density.bin'];
+  const [pb,nb,db,fb,gb,spb,deb] = await Promise.all(names.map(fbuf));
+  assertBundle({'positions.bin':pb,'novelty.bin':nb,'domain.bin':db,'family_idx.bin':fb,
+    'genus_idx.bin':gb,'species_idx.bin':spb,'density.bin':deb});
+  POS=new Float32Array(pb); NOV=new Float32Array(nb); DOM=new Uint8Array(db);
+  FAM=new Int32Array(fb); GEN=new Int32Array(gb); SP=new Int32Array(spb); DEN=new Float32Array(deb);
+  try { LDA_POS = new Float32Array(await fbuf('positions_lda.bin')); FIGMETA = await (await fetch('figure_meta.json?v='+BV)).json(); }
+  catch(e){ PROJ='pca'; }
+  try { const tb=await fbuf('theta.bin'), rb=await fbuf('theta_r.bin');
+    if(tb.byteLength===4*N && rb.byteLength===4*N){ THETA=new Float32Array(tb); THR=new Float32Array(rb); }
+    else console.warn('theta bins misaligned — Datum chart disabled');
+  } catch(e){}
+  if(LDA_POS && LDA_POS.length!==N*3){ console.warn('positions_lda misaligned — Figure chart disabled'); LDA_POS=null; PROJ='pca'; }
+  if(META.instrument){
+    window.updateStamp = () => { if(!META.instrument) return;
+      document.getElementById('stamp').innerHTML =
+        `instrument <span style="color:#7a8">${META.instrument.encoder_id.slice(0,17)}…</span> · `+
+        `${META.instrument.index_id} · datum ${META.instrument.datum_version} · bundle ${META.instrument.bundle_version}`+
+        ` · view <span style="color:#89a">${PROJ}</span> · integrity ✓`; };
+    window.updateStamp();
+  }
+  computeAPOS();
+  buildCloud();
+  makeLabels();
+  document.getElementById('loading').style.display='none';
+  document.getElementById('n-points').textContent = META.n_genomes ?
+    META.n_genomes.toLocaleString() + ' + ' + META.n_organelles.toLocaleString() + ' organelles' : N.toLocaleString();
+  document.getElementById('kappa').textContent = '5/4 (frame) · 1.237 (live fit)';
+  document.getElementById('proj-desc').innerHTML = PROJ_DESC[PROJ];
+  Promise.all(['neighbors.bin','neighbor_dist_u8.bin'].map(fbuf)).then(([a,b])=>{
+    assertGraph(a,b);
+    NB=new Int32Array(a); NDU=new Uint8Array(b); graphReady=true;
+    const g=document.getElementById('gstat'); g.className='ready';
+    g.innerHTML='● neighbor graph ready — click any genome'+
+      '<br><span id="feat" title="Featured demo">▶ Featured: <i>Pan troglodytes</i> (chimpanzee)</span>'+
+      '<br><span id="feat2" title="Jakobid mitochondrion — the most bacteria-like mtDNA known; its neighbors reach toward prokaryotes">▶ Featured: <i>Jakoba</i> mitochondrion (deepest organelle)</span>';
+    document.getElementById('feat').onclick = focusFeatured;
+    document.getElementById('feat2').onclick = () => { const i = ACC ? ACC.indexOf('NC_021127.1') : -1; if(i>=0) window.focusGenome(i); };
+    maybeIntro();
+  });
+  fetch('accessions.json?v='+BV).then(r=>r.json()).then(a=>{ ACC=a; }).catch(()=>{});
+  window.__ACCidx = a => ACC ? ACC.indexOf(a) : -1;
+  window.setProjection = setProjection;
+}
+
+function buildCloud(){
+  geom = new THREE.BufferGeometry();
+  const col = new Float32Array(N*3);
+  for(let i=0;i<N;i++){ const c=DOMCOL[DOM[i]]||DOMCOL[3]; col[i*3]=c[0]; col[i*3+1]=c[1]; col[i*3+2]=c[2]; }
+  originalColors = new Float32Array(col);
+  geom.setAttribute('position', new THREE.BufferAttribute(APOS, 3));
+  geom.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  geom.setAttribute('size', new THREE.BufferAttribute(new Float32Array(N).fill(1), 1));
+  geom.setAttribute('focus', new THREE.BufferAttribute(new Float32Array(N).fill(1), 1));
+  geom.setAttribute('dens', new THREE.BufferAttribute(DEN, 1));
+  mat = new THREE.ShaderMaterial({
+    uniforms: { pointSize:{value:0.55}, opacity:{value:0.85}, densityOn:{value:1.0}, dimT:{value:0.0} },
+    vertexShader: `attribute float size; attribute float focus; attribute float dens;
+      varying vec3 vColor; varying float vFocus; varying float vDens;
+      uniform float pointSize; uniform float densityOn;
+      void main(){ vColor=color; vFocus=focus; vDens=dens; vec4 mv=modelViewMatrix*vec4(position,1.0);
+        float sMul = mix(1.0, 1.1 - 0.45*dens, densityOn);
+        gl_PointSize=min(pointSize*size*sMul*(12.0/-mv.z), 12.0); gl_Position=projectionMatrix*mv; }`,
+    fragmentShader: `varying vec3 vColor; varying float vFocus; varying float vDens;
+      uniform float opacity; uniform float densityOn; uniform float dimT;
+      void main(){ float d=length(gl_PointCoord-0.5)*2.0; if(d>1.0)discard;
+        float core=smoothstep(1.0,0.2,d);
+        float aMul = mix(1.0, 1.05 - 0.4*vDens, densityOn);
+        float fmix = mix(1.0, vFocus, dimT);
+        gl_FragColor=vec4(vColor, opacity*core*fmix*aMul); }`,
+    transparent:true, depthWrite:false, vertexColors:true,
+  });
+  pointsMesh = new THREE.Points(geom, mat); scene.add(pointsMesh);
+  ball = new THREE.Group();
+  const grat = new THREE.Mesh(new THREE.SphereGeometry(1.0, 64, 48),
+    new THREE.MeshBasicMaterial({color:0x33415f, wireframe:true, transparent:true, opacity:0.09, depthWrite:false}));
+  const body = new THREE.Mesh(new THREE.SphereGeometry(0.995, 48, 32),
+    new THREE.MeshBasicMaterial({color:0x0b1226, transparent:true, opacity:0.12, side:THREE.BackSide, depthWrite:false}));
+  ball.add(grat); ball.add(body);
+  scene.add(ball);
+  scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+}
+
+function makeLabel(text, x, y, z, color){
+  const cv=document.createElement('canvas'); cv.width=320; cv.height=72;
+  const ctx=cv.getContext('2d'); ctx.font='600 28px monospace'; ctx.fillStyle=color;
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.shadowColor='rgba(0,0,0,0.95)'; ctx.shadowBlur=8; ctx.fillText(text.toUpperCase(), 160, 38);
+  const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(cv), transparent:true, opacity:0.92, depthWrite:false, depthTest:false}));
+  const o=1.07; sp.position.set(x*o, y*o+0.03, z*o); sp.scale.set(0.36,0.081,1);
+  return sp;
+}
+const LDA_LABELMAP = {Bacteria:0,Archaea:1,Eukaryota:2,Mitochondria:4,Chloroplasts:5};
+function makeLabels(){
+  if(labelGroup){ scene.remove(labelGroup); labelGroup=null; }
+  labelGroup=new THREE.Group();
+  if(PROJ==='lda' && FIGMETA && FIGMETA.medoids){
+    for(const [nm,p] of Object.entries(FIGMETA.medoids)){
+      const c=DOMCOL[LDA_LABELMAP[nm]].map(v=>Math.round(v*255));
+      labelGroup.add(makeLabel(nm, p[0], p[1], p[2], `rgb(${c.join(',')})`)); }
+  } else {
+    const names={0:'Bacteria',1:'Archaea',2:'Eukaryota',4:'Mitochondria',5:'Chloroplasts'};
+    const sum={}, cnt={};
+    for(let i=0;i<N;i++){ const d=DOM[i]; if(!(d in names)) continue;
+      if(!sum[d]){ sum[d]=[0,0,0]; cnt[d]=0; }
+      sum[d][0]+=APOS[i*3]; sum[d][1]+=APOS[i*3+1]; sum[d][2]+=APOS[i*3+2]; cnt[d]++; }
+    for(const d in names){ if(!cnt[d]) continue;
+      const c=DOMCOL[d].map(v=>Math.round(v*255));
+      labelGroup.add(makeLabel(names[d], sum[d][0]/cnt[d], sum[d][1]/cnt[d], sum[d][2]/cnt[d], `rgb(${c.join(',')})`)); }
+  }
+  if(PROJ==='datum'){
+    const lg=new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), new THREE.Vector3(0.93,0,0)]);
+    labelGroup.add(new THREE.Line(lg, new THREE.LineBasicMaterial({color:0x8899cc, transparent:true, opacity:0.35})));
+    labelGroup.add(makeLabel('θ = 0° · E. coli', 0.9, 0.05, 0, 'rgb(150,170,220)'));
+  }
+  labelGroup.visible = document.getElementById('show-labels').checked;
+  scene.add(labelGroup);
+}
+
+// ── tween engine ──
+let camTw=null, posTw=null, edgeTw=null, dimTw=null;
+const easeIO = t => t<0.5 ? 4*t*t*t : 1-Math.pow(-2*t+2,3)/2;
+function tweenCam(toPos, toTgt, dur=950){ camTw={t0:performance.now(),dur,p0:camera.position.clone(),p1:toPos.clone(),g0:controls.target.clone(),g1:toTgt.clone()}; }
+function tweenDim(to, dur=650){ dimTw={t0:performance.now(),dur,v0:mat.uniforms.dimT.value,v1:to}; }
+renderer.domElement.addEventListener('pointerdown', ()=>{ camTw=null; });
+function stepTweens(){
+  const now=performance.now();
+  if(camTw){ const u=Math.min(1,(now-camTw.t0)/camTw.dur), e=easeIO(u);
+    camera.position.lerpVectors(camTw.p0,camTw.p1,e); controls.target.lerpVectors(camTw.g0,camTw.g1,e);
+    if(u>=1) camTw=null; }
+  if(dimTw && mat){ const u=Math.min(1,(now-dimTw.t0)/dimTw.dur);
+    mat.uniforms.dimT.value=dimTw.v0+(dimTw.v1-dimTw.v0)*easeIO(u); if(u>=1) dimTw=null; }
+  if(edgeTw){ const u=Math.min(1,(now-edgeTw.t0)/edgeTw.dur);
+    if(edgeLines) edgeLines.material.opacity=0.82*easeIO(u); if(u>=1) edgeTw=null; }
+  if(posTw && geom){ const u=Math.min(1,(now-posTw.t0)/posTw.dur), e=easeIO(u);
+    const arr=geom.getAttribute('position').array;
+    for(let i=0;i<arr.length;i++) arr[i]=posTw.a[i]+(posTw.b[i]-posTw.a[i])*e;
+    geom.getAttribute('position').needsUpdate=true;
+    if(u>=1){ posTw=null; makeLabels(); } }
+}
+
+const FEATURED_ACC = 'GCA_000002175.2';
+let introDone = false;
+function featuredIdx(){ if(ACC){ const i=ACC.indexOf(FEATURED_ACC); if(i>=0) return i; } return 3; }
+function focusFeatured(){ if(graphReady) window.focusGenome(featuredIdx()); }
+function maybeIntro(){ if(introDone || !graphReady) return; introDone=true; setTimeout(()=>{ if(window._focused==null) focusFeatured(); }, 700); }
+
+function noveltyColor(t){ t=Math.max(0,Math.min(1,t));
+  if(t<0.5){const u=t/0.5; return [0.15+u*0.75, 0.40+u*0.50, 0.95-u*0.75];}
+  const u=(t-0.5)/0.5; return [0.90+u*0.08, 0.90-u*0.78, 0.20-u*0.10]; }
+function applyBaseColors(){ const ca=geom.getAttribute('color');
+  if(document.getElementById('color-novelty').checked){ for(let i=0;i<N;i++){ const c=noveltyColor(NOV[i]); ca.array[i*3]=c[0]; ca.array[i*3+1]=c[1]; ca.array[i*3+2]=c[2]; } }
+  else ca.array.set(originalColors);
+  ca.needsUpdate=true; }
+
+window.__clearTok = 0;
+window.focusGenome = function(i){
+  if(!graphReady){ return; }
+  ++window.__clearTok;
+  const fa=geom.getAttribute('focus'), sa=geom.getAttribute('size'), ca=geom.getAttribute('color');
+  fa.array.fill(0.04); sa.array.fill(1.0);
+  fa.array[i]=1.0; sa.array[i]=3.4;
+  ca.array[i*3]=1.0; ca.array[i*3+1]=1.0; ca.array[i*3+2]=1.0;
+  const base=i*K, famI=FAM[i];
+  const ep=[], ec=[]; let same=0, cross=0; const rows=[];
+  const fx=APOS[i*3], fy=APOS[i*3+1], fz=APOS[i*3+2];
+  for(let k=0;k<K;k++){
+    const j=NB[base+k]; if(j<0) continue;
+    fa.array[j]=1.0; sa.array[j]=1.9;
+    const dist=NDU[base+k]/255*META.dist_scale;
+    const bright=1.0-Math.min(dist/META.dist_scale,1.0);
+    const xf = FAM[j]!==famI; if(xf) cross++; else same++;
+    const c = xf ? [1.0,0.55,0.15] : [0.35,0.80,0.95];
+    ca.array[j*3]=c[0]; ca.array[j*3+1]=c[1]; ca.array[j*3+2]=c[2];
+    ep.push(fx,fy,fz, APOS[j*3],APOS[j*3+1],APOS[j*3+2]);
+    const s=0.40+bright*0.50; for(let e=0;e<2;e++) ec.push(c[0]*s,c[1]*s,c[2]*s);
+    rows.push({j, xf, fam:META.families[FAM[j]], gen:META.genera[GEN[j]], dist});
+  }
+  fa.needsUpdate=true; sa.needsUpdate=true; ca.needsUpdate=true;
+  if(edgeLines){ scene.remove(edgeLines); edgeLines.geometry.dispose(); }
+  const eg=new THREE.BufferGeometry();
+  eg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(ep),3));
+  eg.setAttribute('color', new THREE.BufferAttribute(new Float32Array(ec),3));
+  edgeLines=new THREE.LineSegments(eg, new THREE.LineBasicMaterial({vertexColors:true, transparent:true, opacity:0.0, blending:THREE.AdditiveBlending, depthWrite:false}));
+  scene.add(edgeLines);
+  edgeTw={t0:performance.now()+350, dur:800};
+  tweenDim(1.0, 700);
+  const pts=[new THREE.Vector3(fx,fy,fz)];
+  for(let k=0;k<K;k++){ const j=NB[base+k]; if(j<0)continue; pts.push(new THREE.Vector3(APOS[j*3],APOS[j*3+1],APOS[j*3+2])); }
+  const ctr=new THREE.Vector3(); pts.forEach(p=>ctr.add(p)); ctr.multiplyScalar(1/pts.length);
+  let maxr=0; pts.forEach(p=>maxr=Math.max(maxr, p.distanceTo(ctr)));
+  const dist=Math.max(0.7, maxr*2.8);
+  const dir=ctr.clone().normalize(); if(dir.lengthSq()<1e-6) dir.set(0.7,0.4,0.7).normalize();
+  tweenCam(ctr.clone().add(dir.multiplyScalar(dist)).add(new THREE.Vector3(0,dist*0.22,0)), ctr, 1100);
+  document.getElementById('constel').style.display='block';
+  document.getElementById('hint').style.display='none';
+  document.getElementById('c-foc').textContent = (ACC?ACC[i]+' · ':'') + (META.species[SP[i]]||META.genera[GEN[i]]||'unknown');
+  document.getElementById('c-sub').textContent = DOMNAME[DOM[i]] + ' · ' + (META.families[famI]||'—') + ' · novelty ' + NOV[i].toFixed(2);
+  document.getElementById('c-same').textContent = same+' same family';
+  document.getElementById('c-cross').textContent = cross+' cross-family';
+  rows.sort((a,b)=>a.dist-b.dist);
+  document.getElementById('c-list').innerHTML = rows.map(r=>
+    `<div class="nb"><span class="${r.xf?'xf':'sf'}">${r.gen||r.fam||'?'}</span><span style="color:#667">${r.fam}${r.xf?' ⇥':''}</span></div>`).join('');
+  window._focused=i;
+};
+window.clearFocus = function(){
+  if(!geom) return;
+  tweenDim(0.0, 550);
+  const fa=geom.getAttribute('focus'), sa=geom.getAttribute('size');
+  const tok = ++window.__clearTok;
+  setTimeout(()=>{ if(tok!==window.__clearTok || window._focused!=null) return;
+    fa.array.fill(1.0); sa.array.fill(1.0); fa.needsUpdate=true; sa.needsUpdate=true; }, 570);
+  applyBaseColors();
+  if(edgeLines){ scene.remove(edgeLines); edgeLines=null; }
+  tweenCam(CAM0.pos, CAM0.tgt, 950);
+  document.getElementById('constel').style.display='none';
+  document.getElementById('hint').style.display='block';
+  window._focused=null;
+};
+
+function setProjection(mode){
+  if(mode===PROJ) return;
+  PROJ=mode; computeAPOS();
+  posTw={t0:performance.now(), dur:1100, a:Float32Array.from(geom.getAttribute('position').array), b:APOS};
+  if(labelGroup) labelGroup.visible=false;
+  document.getElementById('proj-desc').innerHTML = PROJ_DESC[mode];
+  if(window.updateStamp) window.updateStamp();
+  document.querySelectorAll('#proj button').forEach(b=>b.classList.toggle('active', b.dataset.m===mode));
+  if(window._focused!=null) setTimeout(()=>{ if(window._focused!=null) window.focusGenome(window._focused); }, 1120);
+  else tweenCam(CAM0.pos, CAM0.tgt, 1100);
+}
+
+document.getElementById('size-slider').oninput = e => mat.uniforms.pointSize.value = parseFloat(e.target.value);
+document.getElementById('opacity-slider').oninput = e => mat.uniforms.opacity.value = parseFloat(e.target.value);
+document.getElementById('show-ball').onchange = e => ball.visible = e.target.checked;
+document.getElementById('show-labels').onchange = e => { if(labelGroup) labelGroup.visible = e.target.checked; };
+document.getElementById('density-aware').onchange = e => mat.uniforms.densityOn.value = e.target.checked ? 1.0 : 0.0;
+document.getElementById('color-novelty').onchange = e => {
+  const ca=geom.getAttribute('color');
+  if(e.target.checked){ for(let i=0;i<N;i++){ const c=noveltyColor(NOV[i]); ca.array[i*3]=c[0]; ca.array[i*3+1]=c[1]; ca.array[i*3+2]=c[2]; } }
+  else ca.array.set(originalColors);
+  ca.needsUpdate=true;
+  document.getElementById('legend-novelty').style.display=e.target.checked?'block':'none';
+  document.getElementById('legend-domain').style.display=e.target.checked?'none':'block';
+};
+document.querySelectorAll('#proj button').forEach(b => b.onclick = () => setProjection(b.dataset.m));
+
+function pick(ev){
+  mouse.x=(ev.clientX/innerWidth)*2-1; mouse.y=-(ev.clientY/innerHeight)*2+1;
+  raycaster.setFromCamera(mouse, camera);
+  const hits = pointsMesh ? raycaster.intersectObject(pointsMesh) : [];
+  return hits.length ? hits[0].index : -1;
+}
+addEventListener('mousemove', ev => {
+  const i = pick(ev);
+  if(i<0){ tooltip.style.display='none'; return; }
+  tooltip.style.display='block'; tooltip.style.left=(ev.clientX+15)+'px'; tooltip.style.top=(ev.clientY+15)+'px';
+  const dn=DOMNAME[DOM[i]];
+  tooltip.innerHTML = `<div class="type" style="color:rgb(${DOMCOL[DOM[i]].map(c=>Math.round(c*255)).join(',')})">${dn}</div>`+
+    `<div class="acc">${ACC?ACC[i]:''}</div><div class="tax">${META.families[FAM[i]]} / ${META.genera[GEN[i]]}</div>`+
+    `<div class="tax">${META.species[SP[i]]||''}</div>`+
+    `<div style="margin-top:4px;font-size:10px;color:#666;">novelty: <span style="color:#c96;">${NOV[i].toFixed(3)}</span>${graphReady?' · click for neighbors':''}</div>`;
+});
+addEventListener('click', ev => { const i=pick(ev); if(i>=0) window.focusGenome(i); else if(window._focused!=null) clearFocus(); });
+addEventListener('keydown', ev => { if(ev.key==='Escape') clearFocus(); });
+addEventListener('resize', () => { camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth,innerHeight); });
+
+(function animate(){ requestAnimationFrame(animate); stepTweens(); controls.update(); renderer.render(scene, camera); })();
+boot();
+</script>
+</body>
+</html>
